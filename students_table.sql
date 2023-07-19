@@ -1,5 +1,5 @@
 CREATE TABLE uzh_certificate.students (
-	id INT auto_increment NULL,
+	id INT auto_increment NOT NULL,
 	first_name varchar(255) NULL,
 	last_name varchar(255) NULL,
 	cardano_address varchar(255) NOT NULL,

@@ -1,3 +1,4 @@
 .env
 keys/*
-!keys/.gitkeep 
+!keys/.gitkeep
+assets/student_*.png
