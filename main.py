@@ -9,8 +9,7 @@ import requests
 import time
 import csv
 import hashlib
-
-
+from datetime import datetime, timezone
 
 ########################################################
 #######           Loading ENV                    #######
@@ -22,6 +21,7 @@ mysql_user = os.getenv('mysql_user')
 mysql_password = os.getenv('mysql_password')
 mysql_database = os.getenv('mysql_database')
 wallet_mnemonic = os.getenv('wallet_mnemonic')
+signing_mnemonic = os.getenv('signing_mnemonic')
 blockfrost_apikey = os.getenv('blockfrost_apikey')
 blockfrost_ipfs = os.getenv('blockfrost_ipfs')
 lock_policy_slot = int(os.getenv('lock_policy_slot'))
@@ -38,24 +38,22 @@ def connect_to_db():
         auth_plugin="mysql_native_password"
     )
 
+def split_into_64chars(string):
+    if len(string) <= 64:
+        return string
+    else:
+        return [string[i:i+64] for i in range(0, len(string), 64)]
+
+
 connect_to_db()
 mycursor = mydb.cursor(dictionary=True)
 
 
 template_image = Image.open("assets/certificate.png")
 font_size = 48
-font = ImageFont.truetype('assets/SourceSansPro-Regular.otf', font_size)
-
-
+font = ImageFont.truetype('assets/SourceSansPro-Bold.otf', font_size)
 text_length = 64 * (font_size/2)
-
 x_coordinate = (template_image.width - text_length) / 2
-
-
-
-
-
-
 
 ########################################################
 #######           Define Network                 #######
@@ -88,6 +86,21 @@ main_address=Address(payment_part=payment_skey.to_verification_key().hash(), sta
 print(main_address)
 
 
+########################################################
+#######           Initiate Signing wallet                #######
+#######           Derive Address 1               #######
+# ########################################################
+
+if not exists(f"keys/claudio.skey") and not exists(f"keys/claudio.vkey"):
+    payment_key_pair = PaymentKeyPair.generate()
+    payment_signing_key = payment_key_pair.signing_key
+    payment_verification_key = payment_key_pair.verification_key
+    payment_signing_key.save(f"keys/claudio.skey")
+    payment_verification_key.save(f"keys/claudio.vkey")
+
+claudio_signing_key = PaymentSigningKey.load(f"keys/claudio.skey")
+claudio_verification_key = PaymentVerificationKey.load(f"keys/claudio.vkey")
+
 with open('input.csv') as csv_file:
     csv_reader = csv.reader(csv_file, delimiter=',')
     line_count = 0
@@ -118,13 +131,16 @@ query = f"select * from students where status = 0"
 mycursor.execute(query)
 all_students = mycursor.fetchall()
 
-# confirmation = input(f"Found {len(all_students)} records to be minted. Continue? (y/n): ")
+confirmation = input(f"Found {len(all_students)} records to be minted. Continue? (y/n): ")
 
-confirmation = 'y'
+# confirmation = 'y'
 
 if confirmation == 'y':
     print("Continuing")
 
+    query = f"select * from students where status = 0 limit 1"
+    mycursor.execute(query)
+    my_student = mycursor.fetchone()
 
     ########################################################
     #######           Generate Policy keys           #######
@@ -152,7 +168,9 @@ if confirmation == 'y':
     policy_id_hex = policy_id.payload.hex()
     native_scripts = [policy]    
     base_name = "CERTIFICATE"
-    for student in all_students:
+    while my_student is not None:
+
+        student = my_student
 
 
 
@@ -176,14 +194,22 @@ if confirmation == 'y':
             res = requests.post("https://ipfs.blockfrost.io/api/v0/ipfs/add", headers= custom_header, files={file_name: f})
             hashed_char = res.json()['ipfs_hash']
 
-        print(f"ipfs://{hashed_char}")
+        
 
 
         builder = TransactionBuilder(cardano)
         builder.ttl = lock_policy_slot
+        builder.add_input_address(main_address)
         asset_name = f"{base_name}{asset_id:04d}"
-        target_hash = hashlib.sha256(bytes(f"{first_name} {cardano_testnet}","utf-8")).hexdigest()
-        print(target_hash)
+        asset_name_bytes = asset_name.encode("utf-8")
+        target_hash = hashlib.sha256(bytes(f"{identity_hash},{last_name},{cardano_testnet}","utf-8")).hexdigest()
+
+        
+        result = cip8.sign(message= target_hash, signing_key= claudio_signing_key, network=cardano_network, attach_cose_key=True)
+
+        signature = split_into_64chars(result['signature'])
+        public_key = split_into_64chars(result['key'])
+        my_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
 
         metadata = {
                     721: {  
@@ -212,7 +238,7 @@ if confirmation == 'y':
                             "https://w3id.org/openbadges/v2;",
                             "https://w3id.org/blockcerts/v2"
                         ],
-                        "issuedOn": "2022-09-04T06:27:22Z",
+                        "issuedOn": my_time,
                         "recipient": [
                             f"{identity_hash}",
                             {
@@ -224,27 +250,69 @@ if confirmation == 'y':
                             "type": "signed",
                             "creator": "https://files.ifi.uzh.ch/bdlt/cert/openbadges/issuer_id.json",
                             "signature": [
-                                "b2ba7c357c74ddd3a70c7f02ab942582738b97a028299bf4ede33d0d66d36967",
-                                "b50c54ce91ac6174b0de8af992de4bf948742b0ff14e9a8585eefa2bf8b1e81a",
+                                signature ,
                                 {
                                     "type": [
-                                        "ECDSA",
+                                        "Ed25519",
                                         "Extension"
                                     ],
                                     "targetHash": target_hash
                                 }
                             ],
-                            "publicKeyOfCreator": [
-                                "4cd4a3d6d6b493edd324c3df243342b28efbdaaa4f7c776ab818f84819f08909",
-                                "f8c9491994f799465050e1a202a17d13d3b76289150792afbd3b6f4a3439195e"
-                            ]
+                            "publicKeyOfCreator": public_key
                         }
                     }
                 }
         
+
+        # print(metadata)
+
         my_asset = Asset()
         my_nft = MultiAsset()
 
+        nft1 = AssetName(asset_name_bytes)
+        my_asset[nft1] = 1
+        my_nft[policy_id] = my_asset
+
+
+        auxiliary_data = AuxiliaryData(AlonzoMetadata(metadata=Metadata(metadata)))
+
+        builder.native_scripts = native_scripts
+        builder.auxiliary_data = auxiliary_data
+        builder.mint = my_nft   
+
+        min_val = min_lovelace(
+            cardano, output=TransactionOutput(cardano_address, Value(0, my_nft))
+        )
+
+
+        builder.add_output(TransactionOutput(cardano_address, Value(min_val, my_nft)))
+
+        signed_tx = builder.build_and_sign([payment_skey, policy_signing_key],change_address=main_address)
+
+        # print(signed_tx.transaction_body.inputs)
+
+        txid = str(signed_tx.id)
+        
+        try: 
+            cardano.submit_tx(signed_tx.to_cbor())
+            print(f"Submitted TX ID: {txid}")
+
+            sql = f"UPDATE students set status=1 where id = {asset_id}"
+            mycursor.execute(sql)
+            mydb.commit()
+            print(f"updated status for student {asset_id}")
+            
+            query = f"select * from students where status = 0 limit 1"
+            mycursor.execute(query)
+            my_student = mycursor.fetchone()
+        except Exception as e:   
+            if "BadInputsUTxO" in str(e):
+                print("Transaction failed, sleeping 10")
+            else:
+                print("Transaction failed, sleeping 10")
+                print(str(e))
+            time.sleep(10)          
         
 
 else:
