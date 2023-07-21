@@ -91,15 +91,8 @@ print(main_address)
 #######           Derive Address 1               #######
 # ########################################################
 
-if not exists(f"keys/claudio.skey") and not exists(f"keys/claudio.vkey"):
-    payment_key_pair = PaymentKeyPair.generate()
-    payment_signing_key = payment_key_pair.signing_key
-    payment_verification_key = payment_key_pair.verification_key
-    payment_signing_key.save(f"keys/claudio.skey")
-    payment_verification_key.save(f"keys/claudio.vkey")
-
 claudio_signing_key = PaymentSigningKey.load(f"keys/claudio.skey")
-claudio_verification_key = PaymentVerificationKey.load(f"keys/claudio.vkey")
+
 
 with open('input.csv') as csv_file:
     csv_reader = csv.reader(csv_file, delimiter=',')
